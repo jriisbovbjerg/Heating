@@ -3,7 +3,7 @@
 #include <DallasTemperature.h>
 #include <OneWire.h>
 
-#define ONE_WIRE_BUS 4                          //D1 pin of nodemcu
+#define ONE_WIRE_BUS 0                          //D1 pin of nodemcu
 
 OneWire oneWire(ONE_WIRE_BUS);
  
