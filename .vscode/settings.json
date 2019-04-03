@@ -1,0 +1,6 @@
+{
+    "terminal.integrated.env.linux": {
+        "PATH": "/home/jrb/.platformio/penv/bin:/home/jrb/.platformio/penv:/usr/local/bin:/usr/local/sbin:/usr/bin:/usr/sbin:/bin:/sbin:/home/jrb/.local/bin:/home/jrb/bin",
+        "PLATFORMIO_CALLER": "vscode"
+    }
+}
