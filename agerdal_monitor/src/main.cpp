@@ -10,16 +10,61 @@
 #include <ESP8266mDNS.h>
 #include <WiFiUdp.h>
 #include <ArduinoOTA.h>
+#include <Adafruit_Sensor.h>
+#include <Adafruit_TSL2561_U.h>
 
 #define DEBUG
+
+//#define LED
 #define TEMP
 //#define DISTANCE
+#define LIGHT
 
 #ifdef DEBUG
  #define DEBUG_PRINT(x)  Serial.println (x)
 #else
  #define DEBUG_PRINT(x)
 #endif
+
+//Wifi
+const char* ssid = "agerdal";
+const char* password = "97721314";
+
+//LEDLoop
+unsigned long durationLED = 2000;  // duration of the LED blink...
+unsigned long lastLED = 0;
+int led = 2;
+int state = 0;
+
+//HTTP
+ESP8266WebServer server(80);
+
+WiFiUDP udp; //UDP for influx
+byte udp_host[] = {192, 168, 10, 7}; // the IP address of InfluxDB host
+int udp_port = 8089; // the port that the InfluxDB UDP plugin is listening on
+
+String hostname  = "ArduinoOTA.getHostname";
+String payload = "default";
+
+#ifdef LED
+  void LEDLoop() {
+    if (millis() - lastLED > durationLED) {
+      digitalWrite(led, state);
+      state = !state;
+      lastLED = millis();
+    }
+  }
+#endif
+
+void send_value(String location, String value) {
+  payload = "temp";
+  payload += ",host="     + hostname;
+  payload += ",location=" + location;
+  payload += " value="    + value;
+  udp.beginPacket(udp_host, udp_port);
+  udp.print(payload);
+  udp.endPacket();
+}
 
 #ifdef TEMP
   //DS18B20
@@ -37,60 +82,7 @@
 
   unsigned long lastTemp; //Time of last measurement
   const int durationTemp = 3000; //The time between temperature measurement
-#endif
-
-//Distance
-#ifdef DISTANCE
-  unsigned long lastPing; 
-  const int durationPing = 60000; //The time between distance measurement
-
-  const int trigPin = 2;  //D4
-  const int echoPin = 4;  //D2
-
-  long cm, fillpct;
-  long duration;
-  int distance;
-#endif
-
-//Wifi
-const char* ssid = "agerdal";
-const char* password = "97721314";
-
-//LEDLoop
-unsigned long durationLED = 2000;  // duration of the LED blink...
-unsigned long lastLED = 0;
-int led = 2;
-int state = 1;
-
-//HTTP
-ESP8266WebServer server(80);
-
-WiFiUDP udp; //UDP for influx
-byte udp_host[] = {192, 168, 10, 7}; // the IP address of InfluxDB host
-int udp_port = 8089; // the port that the InfluxDB UDP plugin is listening on
-
-String hostname  = "ArduinoOTA.getHostname";
-String payload = "default";
-
-void send_value(String location, String value) {
-  payload = "temp";
-  payload += ",host="     + hostname;
-  payload += ",location=" + location;
-  payload += " value="    + value;
-  udp.beginPacket(udp_host, udp_port);
-  udp.print(payload);
-  udp.endPacket();
-}
-
-void LEDLoop() {
-  if (millis() - lastLED > durationLED) {
-    digitalWrite(led, state);
-    state = !state;
-    lastLED = millis();
-  }
-}
-#ifdef TEMP
-  //Convert device id to String
+    //Convert device id to String
   String GetAddressToString(DeviceAddress deviceAddress){
     String str = "";
     for (uint8_t i = 0; i < 8; i++){
@@ -100,7 +92,7 @@ void LEDLoop() {
     return str;
   }
 
-  void SetupDS18B20(){
+  void setupDS18B20(){
     DS18B20.begin();
     
     numberOfDevices = DS18B20.getDeviceCount();
@@ -161,8 +153,106 @@ void LEDLoop() {
   }
 #endif
 
+#ifdef LIGHT
+  // The address will be different depending on whether you leave
+  // the ADDR pin float (addr 0x39), or tie it to ground or vcc. In those cases
+  // use TSL2561_ADDR_LOW (0x29) or TSL2561_ADDR_HIGH (0x49) respectively
+  Adafruit_TSL2561_Unified tsl = Adafruit_TSL2561_Unified(TSL2561_ADDR_FLOAT, 000001);
+
+  float ligthValue;
+  unsigned long lastLigth;
+  const int durationLight = 5000; // The time between ligth measurements
+
+  void displaySensorDetails(void) {
+    sensor_t sensor;
+    tsl.getSensor(&sensor);
+    Serial.println("------------------------------------");
+    Serial.print  ("Sensor:       "); Serial.println(sensor.name);
+    Serial.print  ("Driver Ver:   "); Serial.println(sensor.version);
+    Serial.print  ("Unique ID:    "); Serial.println(sensor.sensor_id);
+    Serial.print  ("Max Value:    "); Serial.print(sensor.max_value); Serial.println(" lux");
+    Serial.print  ("Min Value:    "); Serial.print(sensor.min_value); Serial.println(" lux");
+    Serial.print  ("Resolution:   "); Serial.print(sensor.resolution); Serial.println(" lux");  
+    Serial.println("------------------------------------");
+    Serial.println("");
+    delay(500);
+  }
+
+  void configureSensor(void) {
+    /* You can also manually set the gain or enable auto-gain support */
+    // tsl.setGain(TSL2561_GAIN_1X);      /* No gain ... use in bright light to avoid sensor saturation */
+    // tsl.setGain(TSL2561_GAIN_16X);     /* 16x gain ... use in low light to boost sensitivity */
+    tsl.enableAutoRange(true);            /* Auto-gain ... switches automatically between 1x and 16x */
+    
+    /* Changing the integration time gives you better sensor resolution (402ms = 16-bit data) */
+    // tsl.setIntegrationTime(TSL2561_INTEGRATIONTIME_13MS);      /* fast but low resolution */
+    // tsl.setIntegrationTime(TSL2561_INTEGRATIONTIME_101MS);  /* medium resolution and speed   */
+    tsl.setIntegrationTime(TSL2561_INTEGRATIONTIME_402MS);  /* 16-bit data but slowest conversions */
+
+    /* Update these values depending on what you've set above! */  
+    Serial.println("------------------------------------");
+    Serial.print  ("Gain:         "); Serial.println("Auto");
+    Serial.print  ("Timing:       "); Serial.println("402 ms");
+    Serial.println("------------------------------------");
+
+  }
+
+    void setupLightSensor() {
+    
+    Serial.println("Light Sensor Test"); Serial.println("");
+  
+    /* Initialise the sensor */
+    //use tsl.begin() to default to Wire, 
+    //tsl.begin(&Wire2) directs api to use Wire2, etc.
+    if(!tsl.begin())
+    {
+      /* There was a problem detecting the TSL2561 ... check your connections */
+      Serial.print("Ooops, no TSL2561 detected ... Check your wiring or I2C ADDR!");
+      while(1);
+    }
+    
+    /* Display some basic information on this sensor */
+    displaySensorDetails();
+    
+    /* Setup the sensor gain and integration time */
+    configureSensor();
+  }
+
+  void LightLoop() {
+    if (millis() - lastLigth > durationLight ) {
+      /* Get a new sensor event */ 
+      sensors_event_t event;
+
+      tsl.getEvent(&event);
+      ligthValue = event.light;
+      send_value("light-01", String(event.light));
+
+      /* Display the results (light is measured in lux) */
+      if (event.light) {
+        Serial.print(event.light); Serial.println(" lux");
+        
+      }
+      else {
+        /* If event.light = 0 lux the sensor is probably saturated
+        and no reliable data could be generated! */
+        Serial.println("Sensor overload");
+      }
+    }
+  }
+#endif
+  
 #ifdef DISTANCE
-  void DistLoop(long now){
+  unsigned long lastPing; 
+  const int durationPing = 60000; //The time between distance measurement
+
+  const int trigPin = 2;  //D4
+  const int echoPin = 4;  //D2
+
+  long cm, fillpct;
+  long duration;
+  int distance;
+
+  void DistLoop(){
     if (millis() - lastPing > durationPing ) {
       digitalWrite(trigPin, LOW); // Clears the trigPin
       delayMicroseconds(2);
@@ -174,13 +264,13 @@ void LEDLoop() {
       lastPing = millis();  //Remember the last time measurement
     }
   }
+  
+  long scaleMeasurementToDisplay(long value, long maxX, long minX, long maxY, long minY) {
+    long m = (maxY - minY) / (maxX - minX);
+    long b = minY + ( m * minX);
+    return ( value * m ) + b;
+  }
 #endif
-
-long scaleMeasurementToDisplay(long value, long maxX, long minX, long maxY, long minY) {
-  long m = (maxY - minY) / (maxX - minX);
-  long b = minY + ( m * minX);
-  return ( value * m ) + b;
-}
 
 void HandleRoot(){
   char temperatureString[6];
@@ -193,6 +283,12 @@ void HandleRoot(){
   message += payload;
   message += "\r\n<br>";
 
+  #ifdef LIGHT
+    message += "Ligth [lux]: ";
+    message += ligthValue;
+    message += "\r\n<br>";
+  #endif
+
   #ifdef DISTANCE
     message += "Distance: ";
     message += distance;
@@ -204,12 +300,12 @@ void HandleRoot(){
   message += "\r\n<br>";
   
   #ifdef TEMP
-    message += "Number of devices: ";
+    message += "Number of Temperature devices: ";
     message += numberOfDevices;
     message += "\r\n<br>";
 
     message += "<table border='1'>\r\n";
-    message += "<tr><td>Device id</td><td>Temperature</td></tr>\r\n";
+    message += "<tr><td>Device id</td><td>Temperature [C]</td></tr>\r\n";
     for(int i=0;i<numberOfDevices;i++){
       dtostrf(tempDev[i], 2, 2, temperatureString);
       message += "<tr><td>";
@@ -278,18 +374,24 @@ void setup() {
   server.onNotFound( HandleNotFound );
   server.begin();
   
-
-  lastLED = millis();
+  digitalWrite(led, 1);
+  #ifdef LED
+    lastLED = millis();
+  #endif
 
   //Setup DS18b20 temperature sensor
   #ifdef TEMP
-    SetupDS18B20();
+    setupDS18B20();
   #endif
 
   #ifdef DISTANCE
     lastPing = millis();
     pinMode(trigPin, OUTPUT); // Sets the trigPin as an Output
     pinMode(echoPin, INPUT); // Sets the echoPin as an Input
+  #endif
+
+  #ifdef LIGHT
+    setupLightSensor();
   #endif
 }
 
@@ -299,7 +401,9 @@ void loop() {
 
   server.handleClient();
 
-  LEDLoop();
+  #ifdef LED
+    LEDLoop();
+  #endif
 
   #ifdef TEMP
     TempLoop();
@@ -307,5 +411,9 @@ void loop() {
 
   #ifdef DISTANCE
     DistLoop();
-  #endif  
+  #endif
+
+  #ifdef LIGHT
+    LightLoop();
+  #endif
 }
