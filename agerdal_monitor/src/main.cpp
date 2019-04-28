@@ -11,14 +11,14 @@
 #include <WiFiUdp.h>
 #include <ArduinoOTA.h>
 #include <Adafruit_Sensor.h>
-#include <Adafruit_TSL2561_U.h>
 
 #define DEBUG
 
-//#define LED
-#define TEMP
+#define LED
+//#define TEMP
 //#define DISTANCE
-#define LIGHT
+//#define LIGHT
+#define PRESSURE
 
 #ifdef DEBUG
  #define DEBUG_PRINT(x)  Serial.println (x)
@@ -31,7 +31,7 @@ const char* ssid = "agerdal";
 const char* password = "97721314";
 
 //LEDLoop
-unsigned long durationLED = 2000;  // duration of the LED blink...
+unsigned long durationLED = 500;  // duration of the LED blink...
 unsigned long lastLED = 0;
 int led = 2;
 int state = 0;
@@ -45,6 +45,35 @@ int udp_port = 8089; // the port that the InfluxDB UDP plugin is listening on
 
 String hostname  = "ArduinoOTA.getHostname";
 String payload = "default";
+#ifdef PRESSURE
+
+#include <Adafruit_BMP280.h>
+Adafruit_BMP280 bme; // I2C
+#define SEALEVELPRESSURE_HPA (1013.25)
+
+void setupBMP280(){
+  if (!bme.begin(0x76)) {  
+    Serial.println("Could not find a valid BMP280 sensor, check wiring!");
+    while (1);
+  }
+}
+
+  void PressureLoop () {
+    if( millis() - lastPress > durationPress ){ //Take a measurement at a fixed time (durationTemp = 5000ms, 5s)
+      Serial.print("Pressure = ");
+      Serial.print(bme.readPressure());
+      Serial.println(" Pa");
+      
+
+        send_value("Pressure", bme.readPressure());
+      }
+      
+      lastTemp = millis();  //Remember the last time measurement
+    }
+  }
+
+
+#endif
 
 #ifdef LED
   void LEDLoop() {
@@ -154,6 +183,7 @@ void send_value(String location, String value) {
 #endif
 
 #ifdef LIGHT
+  #include <Adafruit_TSL2561_U.h>
   // The address will be different depending on whether you leave
   // the ADDR pin float (addr 0x39), or tie it to ground or vcc. In those cases
   // use TSL2561_ADDR_LOW (0x29) or TSL2561_ADDR_HIGH (0x49) respectively
@@ -360,8 +390,30 @@ void setup() {
   DEBUG_PRINT ("WiFi connected");
   DEBUG_PRINT ("IP address: ");
   DEBUG_PRINT (WiFi.localIP());   //You can get IP address assigned to ESP
+  
+  ArduinoOTA.onStart([]() {
+    Serial.println("Start OTA");
+  });
+
+  ArduinoOTA.onProgress([](unsigned int progress, unsigned int total) {
+    Serial.printf("Progress: %u%%\r", (progress / (total / 100)));
+  });
+  
+  ArduinoOTA.onError([](ota_error_t error) {
+    Serial.printf("Error[%u]: ", error);
+    if (error == OTA_AUTH_ERROR) Serial.println("Auth Failed");
+    else if (error == OTA_BEGIN_ERROR) Serial.println("Begin Failed");
+    else if (error == OTA_CONNECT_ERROR) Serial.println("Connect Failed");
+    else if (error == OTA_RECEIVE_ERROR) Serial.println("Receive Failed");
+    else if (error == OTA_END_ERROR) Serial.println("End Failed");
+  });
+  
+  DEBUG_PRINT ("ArduinoOTA begin: ");
   ArduinoOTA.begin();
+  DEBUG_PRINT ("ArduinoOTA begin done: ");
+  
   hostname = ArduinoOTA.getHostname();
+
   DEBUG_PRINT ("hostname: ");
   DEBUG_PRINT (hostname);
   
@@ -382,6 +434,10 @@ void setup() {
   //Setup DS18b20 temperature sensor
   #ifdef TEMP
     setupDS18B20();
+  #endif
+
+  #ifdef PRESSURE
+    setupBMP280();
   #endif
 
   #ifdef DISTANCE
@@ -405,6 +461,10 @@ void loop() {
     LEDLoop();
   #endif
 
+  #ifdef PRESSURE
+    PressureLoop();
+  #endif
+  
   #ifdef TEMP
     TempLoop();
   #endif
