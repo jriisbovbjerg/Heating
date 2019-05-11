@@ -13,7 +13,7 @@
 #include <Adafruit_Sensor.h>
 
 #define DEBUG
-
+#define CARHEAL
 #define LED
 //#define TEMP
 //#define DISTANCE
@@ -30,13 +30,6 @@
 const char* ssid = "agerdal";
 const char* password = "97721314";
 
-//LEDLoop
-unsigned long durationLED = 500;  // duration of the LED blink...
-unsigned long lastLED = 0;
-int led = 2;
-int state = 0;
-
-//HTTP
 ESP8266WebServer server(80);
 
 WiFiUDP udp; //UDP for influx
@@ -45,46 +38,8 @@ int udp_port = 8089; // the port that the InfluxDB UDP plugin is listening on
 
 String hostname  = "ArduinoOTA.getHostname";
 String payload = "default";
-#ifdef PRESSURE
 
-#include <Adafruit_BMP280.h>
-Adafruit_BMP280 bme; // I2C
-#define SEALEVELPRESSURE_HPA (1013.25)
-
-void setupBMP280(){
-  if (!bme.begin(0x76)) {  
-    Serial.println("Could not find a valid BMP280 sensor, check wiring!");
-    while (1);
-  }
-}
-
-  void PressureLoop () {
-    if( millis() - lastPress > durationPress ){ //Take a measurement at a fixed time (durationTemp = 5000ms, 5s)
-      Serial.print("Pressure = ");
-      Serial.print(bme.readPressure());
-      Serial.println(" Pa");
-      
-
-        send_value("Pressure", bme.readPressure());
-      }
-      
-      lastTemp = millis();  //Remember the last time measurement
-    }
-  }
-
-
-#endif
-
-#ifdef LED
-  void LEDLoop() {
-    if (millis() - lastLED > durationLED) {
-      digitalWrite(led, state);
-      state = !state;
-      lastLED = millis();
-    }
-  }
-#endif
-
+// udp message
 void send_value(String location, String value) {
   payload = "temp";
   payload += ",host="     + hostname;
@@ -94,6 +49,100 @@ void send_value(String location, String value) {
   udp.print(payload);
   udp.endPacket();
 }
+
+
+
+#ifdef LED
+  //LEDLoop
+  unsigned long durationLED = 500;  // duration of the LED blink...
+  unsigned long lastLED = 0;
+  int led = 2;
+  int state = 0;
+
+  void LEDLoop() {
+    if (millis() - lastLED > durationLED) {
+      digitalWrite(led, state);
+      state = !state;
+      lastLED = millis();
+    }
+  }
+#endif
+
+#ifdef PRESSURE
+
+  #include <Adafruit_BMP280.h>
+  Adafruit_BMP280 bme; // I2C
+  
+  unsigned long lastPress; //Time of last measurement
+  const int durationPress = 3000; //The time between temperature measurement
+  float pressureValue;
+  float zeroPressure = 101984;
+
+  void setupBMP280(){
+    if (!bme.begin(0x76)) {  
+      DEBUG_PRINT ("Could not find a valid BMP280 sensor, check wiring!");
+      while (1);
+    }    
+  }
+
+  void PressureLoop () {
+    if( millis() - lastPress > durationPress ){ //Take a measurement at a fixed time (durationTemp = 5000ms, 5s)
+      pressureValue = bme.readPressure();
+      Serial.print("abs. Pressure: ");
+      Serial.print(bme.readPressure());
+      Serial.print(" Pa, - diff: ");
+      Serial.print(String(pressureValue-zeroPressure));
+      Serial.print(" Pa, - Temperature: ");
+      Serial.print(bme.readTemperature());
+      Serial.println(" *C");
+      send_value("Pressure", String(pressureValue));
+      
+      
+      lastPress = millis();  //Remember the last time measurement
+    }
+  }
+
+
+#endif
+
+#ifdef CARHEAL
+  int lowLED = 14;
+  int okLED = 12;
+  int highLED = 13;
+  int button = 0;
+  
+  unsigned long durationCarLED = 100;  // inteval of update of the LED...
+  unsigned long lastCarLED = 0;
+  float lowLimit = 50;
+  float highLimit = 100;
+  
+  
+  void CarLEDLoop() {
+         
+
+    
+    if (millis() - lastCarLED > durationCarLED) {
+      pressureValue = bme.readPressure();
+      if (pressureValue > zeroPressure - lowLimit) {
+        digitalWrite(lowLED, 1);
+        digitalWrite(okLED, 0);
+        digitalWrite(highLED, 0);}
+
+      else if (pressureValue < zeroPressure - highLimit) {
+        digitalWrite(lowLED, 0);
+        digitalWrite(okLED, 0);
+        digitalWrite(highLED, 1);}
+
+      else {
+        digitalWrite(lowLED, 0);
+        digitalWrite(okLED, 1);
+        digitalWrite(highLED, 0);
+      }
+
+      lastCarLED = millis();
+    }
+  }
+#endif
 
 #ifdef TEMP
   //DS18B20
@@ -303,14 +352,17 @@ void send_value(String location, String value) {
 #endif
 
 void HandleRoot(){
-  char temperatureString[6];
-
+  
   String message = "Hostname: ";
   message += hostname;
   message += ".local\r\n<br>";
 
   message += "Last Payload: ";
   message += payload;
+  message += "\r\n<br>";
+
+  message += "Time: ";
+  message += millis();
   message += "\r\n<br>";
 
   #ifdef LIGHT
@@ -325,11 +377,15 @@ void HandleRoot(){
     message += "\r\n<br>";
   #endif
 
-  message += "Time: ";
-  message += millis();
-  message += "\r\n<br>";
-  
+  #ifdef PRESSURE
+    message += "Pressure [pa]: ";
+    message += pressureValue;
+    message += "\r\n<br>";
+  #endif
+
   #ifdef TEMP
+    char temperatureString[6];
+
     message += "Number of Temperature devices: ";
     message += numberOfDevices;
     message += "\r\n<br>";
@@ -370,7 +426,6 @@ void HandleNotFound(){
 
 void setup() {
   
-  pinMode(led, OUTPUT);
   // We start by connecting to a WiFi network
   #ifdef DEBUG
     Serial.begin(115200);
@@ -427,7 +482,30 @@ void setup() {
   server.begin();
   
   digitalWrite(led, 1);
+
+  #ifdef CARHEAL
+    pinMode(okLED, OUTPUT);
+    pinMode(lowLED, OUTPUT);
+    pinMode(highLED, OUTPUT);
+    pinMode(button, INPUT);
+    lastCarLED = millis();
+
+    digitalWrite(lowLED, 1);
+    delay(1000);   
+    digitalWrite(lowLED, 0);
+
+    digitalWrite(okLED, 1);
+    delay(1000);
+    digitalWrite(okLED, 0);
+
+    digitalWrite(highLED, 1);
+    delay(1000);
+    digitalWrite(highLED, 0);
+
+  #endif
+
   #ifdef LED
+    pinMode(led, OUTPUT);
     lastLED = millis();
   #endif
 
@@ -438,6 +516,10 @@ void setup() {
 
   #ifdef PRESSURE
     setupBMP280();
+    delay(500);2
+    2
+    v
+    zeroPressure = bme.readPressure();
   #endif
 
   #ifdef DISTANCE
@@ -475,5 +557,9 @@ void loop() {
 
   #ifdef LIGHT
     LightLoop();
+  #endif
+  
+  #ifdef CARHEAL
+    CarLEDLoop();
   #endif
 }
