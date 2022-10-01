@@ -1,0 +1,16 @@
+{
+	"folders": [
+		{
+			"path": "../../initial_test"
+		},
+		{
+			"name": "all_sensor_nodeMCU",
+			"path": ".."
+		},
+		{
+			"name": "simple_webserver",
+			"path": "../../simple_webserver"
+		}
+	],
+	"settings": {}
+}
