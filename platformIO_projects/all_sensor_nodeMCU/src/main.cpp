@@ -1,17 +1,21 @@
 #include <Arduino.h>
 #include <OneWire.h>
 #include <DallasTemperature.h>
+//Not used?
 //#include <ESP8266WebServerSecureAxTLS.h>
-#include <ESP8266WebServer.h>
 //#include <ESP8266WebServerSecureBearSSL.h>
 //#include <ESP8266WebServerSecure.h>
 //#include <DNSServer.h>
+//
+#include <ESP8266WebServer.h>
 #include <ESP8266WiFi.h>
 #include <ESP8266mDNS.h>
 #include <WiFiUdp.h>
 #include <ArduinoOTA.h>
 #include <Adafruit_Sensor.h>
 #include <Adafruit_TSL2561_U.h>
+#include "ADS1X15.h"
+
 
 #define DEBUG
 
@@ -20,6 +24,7 @@
 //#define DISTANCE
 //#define LIGHT
 //#define BLINK
+#define PRESSURE
 
 #ifdef DEBUG
  #define DEBUG_PRINT(x)  Serial.println (x)
@@ -27,12 +32,20 @@
  #define DEBUG_PRINT(x)
 #endif
 
+//ADS1115
+ADS1115 ADS[4];
+uint16_t val[16];
+int idx = 0;
+
+uint32_t last = 0, now = 0;
+
+
 //Wifi
 const char* ssid = "agerdal";
 const char* password = "97721314";
 
 //LEDLoop
-unsigned long durationLED = 1000;  // duration of the LED blink...
+unsigned long durationLED = 1500;  // duration of the LED blink...
 unsigned long lastLED = 0;
 int led = 2;
 int state = 0;
@@ -115,8 +128,6 @@ void send_value(String location, String value) {
   }
 #endif
 
-
-
 #ifdef TEMP
   //DS18B20
   #define ONE_WIRE_BUS 0 //Pin to which is attached a temperature sensor D3=0, D2=4
@@ -132,7 +143,7 @@ void send_value(String location, String value) {
   float tempDevLast[ONE_WIRE_MAX_DEV]; //Previous temperature measurement
 
   unsigned long lastTemp; //Time of last measurement
-  const int durationTemp = 60000; //The time between temperature measurement
+  const int durationTemp = 5000; //The time between temperature measurement
     //Convert device id to String
   String GetAddressToString(DeviceAddress deviceAddress){
     String str = "";
@@ -162,13 +173,13 @@ void send_value(String location, String value) {
         Serial.print(i, DEC);
         Serial.print(" with address: " + GetAddressToString(devAddr[i]));
         Serial.println();
-      }else{
+      } else {
         Serial.print("Found ghost device at ");
         Serial.print(i, DEC);
         Serial.print(" but could not detect address. Check power and cabling");
       }
 
-      DS18B20.setResolution( 12 ); 
+      DS18B20.setResolution(12); 
       //Get resolution of DS18b20
       Serial.print("Resolution: ");
       Serial.print(DS18B20.getResolution( devAddr[i] ));
@@ -205,6 +216,76 @@ void send_value(String location, String value) {
     }
   }
 #endif
+
+#ifdef PRESSURE
+
+  unsigned long lastPressure;
+  const int durationPressure = 500; // The time in ms between measurements
+
+
+  void ADS_request_all()
+    {
+      //  Serial.println(__FUNCTION__);
+      for (int i = 0; i < 4; i++)
+      {
+        if (ADS[i].isConnected()) ADS[i].requestADC(idx);
+      }
+    }
+    
+    bool ADS_read_all()
+      {
+        for (int i = 0; i < 4; i++)
+        {
+          if (ADS[i].isConnected() && ADS[i].isBusy()) return true;
+        }
+        //  Serial.print("IDX:\t");
+        //  Serial.println(idx);
+        for (int i = 0; i < 4; i++)
+        {
+          if (ADS[i].isConnected())
+          {
+            val[i * 4 + idx] = ADS[i].getValue();
+          }
+        }
+        idx++;
+        if (idx < 4)
+        {
+          ADS_request_all();
+          return true;
+        }
+        idx = 0;
+        return false;
+      }
+    
+    void PressureLoop() {
+      if (millis() - lastPressure > durationPressure ) {
+
+        //  wait until all is read...
+        while (ADS_read_all());
+          /* Get a new sensor event */ 
+          send_value("analog-01", String(val[0]));
+          send_value("analog-02", String(val[1]));
+          send_value("analog-03", String(val[2]));
+          send_value("analog-04", String(val[3]));
+
+          lastPressure = millis();  //Remember time of the last time measurement
+          
+          ADS_request_all();
+        }
+      }
+
+#endif  
+
+
+
+
+
+
+
+
+
+  
+
 
 #ifdef LIGHT
   // The address will be different depending on whether you leave
@@ -333,6 +414,9 @@ void HandleRoot(){
   message += hostname;
   message += ".local\r\n<br>";
 
+  message += "Date of code: 20240120";
+  message += "\r\n<br>";
+
   message += "Last Payload: ";
   message += payload;
   message += "\r\n<br>";
@@ -340,6 +424,24 @@ void HandleRoot(){
   #ifdef LIGHT
     message += "Ligth [lux]: ";
     message += ligthValue;
+    message += "\r\n<br>";
+  #endif
+
+  #ifdef PRESSURE
+    message += "Pressure-01 [Bar] 3.3: ";
+    message += val[0];
+    message += "\r\n<br>";
+
+    message += "Pressure-02 [Bar] 250ohm: ";
+    message += val[1];
+    message += "\r\n<br>";
+
+    message += "Pressure-03 [Bar] GND: ";
+    message += val[2];
+    message += "\r\n<br>";
+
+    message += "Pressure-04 [Bar] Float: ";
+    message += val[3];
     message += "\r\n<br>";
   #endif
 
@@ -395,8 +497,30 @@ void HandleNotFound(){
 
 void setup() {
   
+  
+  //ADS1115
+  Wire.begin();
+
+  for (uint8_t i = 0; i < 4; i++)
+  {
+    uint8_t address = 0x48 + i;
+    ADS[i] = ADS1115(address);
+
+    Serial.print(address, HEX);
+    Serial.print("  ");
+    Serial.println(ADS[i].begin() ? "connected" : "not connected");
+
+    //  0 = slow   4 = medium   7 = fast, but more noise
+    ADS[i].setDataRate(4);
+  }
+  
+  ADS_request_all();
+  
+  //End ADS1115
+  
   pinMode(led, OUTPUT);
   // We start by connecting to a WiFi network
+  
   #ifdef DEBUG
     Serial.begin(115200);
     Serial.println();
@@ -449,6 +573,10 @@ void setup() {
   #ifdef LIGHT
     setupLightSensor();
   #endif
+  
+  #ifdef PRESSURE
+    //setupPressureSensor();
+  #endif
 
   #ifdef BLINK
     lastBlink = millis();
@@ -476,6 +604,10 @@ void loop() {
 
   #ifdef LIGHT
     LightLoop();
+  #endif
+
+  #ifdef PRESSURE
+    PressureLoop();
   #endif
 
   #ifdef BLINK
