@@ -143,7 +143,7 @@ void send_value(String location, String value) {
   float tempDevLast[ONE_WIRE_MAX_DEV]; //Previous temperature measurement
 
   unsigned long lastTemp; //Time of last measurement
-  const int durationTemp = 5000; //The time between temperature measurement
+  const int durationTemp = 30000; //The time between temperature measurement
     //Convert device id to String
   String GetAddressToString(DeviceAddress deviceAddress){
     String str = "";
@@ -195,7 +195,7 @@ void send_value(String location, String value) {
 
   //Loop measuring the temperature
   void TempLoop () {
-    if( millis() - lastTemp > durationTemp ){ //Take a measurement at a fixed time (durationTemp = 5000ms, 5s)
+    if( millis() - lastTemp > durationTemp ){ //Take a measurement at a fixed time (durationTemp = 30000ms, 30s)
       String value;
       char temperatureString[6];
       DS18B20.setWaitForConversion(true); //No waiting for measurement
@@ -220,42 +220,44 @@ void send_value(String location, String value) {
 #ifdef PRESSURE
 
   unsigned long lastPressure;
-  const int durationPressure = 500; // The time in ms between measurements
+  const int durationPressure = 250; // The time in ms between measurements
 
 
   void ADS_request_all()
     {
-      //  Serial.println(__FUNCTION__);
       for (int i = 0; i < 4; i++)
       {
         if (ADS[i].isConnected()) ADS[i].requestADC(idx);
       }
     }
     
-    bool ADS_read_all()
-      {
-        for (int i = 0; i < 4; i++)
+  bool ADS_read_all()
+    {
+      for (int i = 0; i < 4; i++)
         {
           if (ADS[i].isConnected() && ADS[i].isBusy()) return true;
         }
-        //  Serial.print("IDX:\t");
-        //  Serial.println(idx);
-        for (int i = 0; i < 4; i++)
+      
+      for (int i = 0; i < 4; i++)
         {
           if (ADS[i].isConnected())
           {
             val[i * 4 + idx] = ADS[i].getValue();
           }
         }
-        idx++;
-        if (idx < 4)
+      
+      idx++;
+      
+      if (idx < 4)
         {
           ADS_request_all();
           return true;
         }
-        idx = 0;
-        return false;
-      }
+      
+      idx = 0;
+      
+      return false;
+    }
     
     void PressureLoop() {
       if (millis() - lastPressure > durationPressure ) {
