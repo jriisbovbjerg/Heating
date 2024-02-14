@@ -1,12 +1,6 @@
 #include <Arduino.h>
 #include <OneWire.h>
 #include <DallasTemperature.h>
-//Not used?
-//#include <ESP8266WebServerSecureAxTLS.h>
-//#include <ESP8266WebServerSecureBearSSL.h>
-//#include <ESP8266WebServerSecure.h>
-//#include <DNSServer.h>
-//
 #include <ESP8266WebServer.h>
 #include <ESP8266WiFi.h>
 #include <ESP8266mDNS.h>
@@ -20,11 +14,12 @@
 #define DEBUG
 
 #define LED
-#define TEMP
+//#define TEMP
 //#define DISTANCE
 //#define LIGHT
 //#define BLINK
-#define PRESSURE
+#define S0_PULSE
+//#define PRESSURE
 
 #ifdef DEBUG
  #define DEBUG_PRINT(x)  Serial.println (x)
@@ -32,7 +27,7 @@
  #define DEBUG_PRINT(x)
 #endif
 
-//ADS1115
+//ADS1115 - 4 channal 16 bit analog input
 ADS1115 ADS[4];
 uint16_t val[16];
 int idx = 0;
@@ -69,6 +64,43 @@ void send_value(String location, String value) {
   udp.print(payload);
   udp.endPacket();
 }
+
+#ifdef S0_PULSE
+  #define PULSE 17
+  // constants won't change :
+  const long info_interval = 5019;           // interval at which to report (milliseconds)
+  const long factor = 3600000 / info_interval;
+
+  int counter = 0;
+  long int lastPulse;
+  bool light = false;
+  
+  void S0_PulseLoop() {
+    
+    int sensorValue = analogRead(PULSE);   // read the input on analog pin 0
+    delay(5);
+        
+    if (sensorValue >=300) {  
+      if (!light) {
+        light = true;
+        counter++ ;
+      }
+    }	else {
+      light =false;
+    }
+
+    if (millis() - lastPulse > info_interval) {
+      
+      send_value("pulse-01", String(counter * factor));
+      send_value("power-02", String(sensorValue));
+  
+      counter = 0;
+      lastPulse = millis();
+  
+    };
+  }
+
+#endif
 
 #ifdef BLINK
   #define LDR 17
@@ -264,29 +296,20 @@ void send_value(String location, String value) {
 
         //  wait until all is read...
         while (ADS_read_all());
-          /* Get a new sensor event */ 
-          send_value("analog-01", String(val[0]));
-          send_value("analog-02", String(val[1]));
-          send_value("analog-03", String(val[2]));
-          send_value("analog-04", String(val[3]));
 
-          lastPressure = millis();  //Remember time of the last time measurement
-          
-          ADS_request_all();
-        }
+        /* Get a new sensor event */ 
+        send_value("analog-01", String(val[0]));
+        send_value("analog-02", String(val[1]));
+        send_value("analog-03", String(val[2]));
+        send_value("analog-04", String(val[3]));
+
+        lastPressure = millis();  //Remember time of the last time measurement
+        
+        ADS_request_all();
       }
+    }
 
 #endif  
-
-
-
-
-
-
-
-
-
-  
 
 
 #ifdef LIGHT
@@ -416,7 +439,7 @@ void HandleRoot(){
   message += hostname;
   message += ".local\r\n<br>";
 
-  message += "Date of code: 20240120";
+  message += "Date of code: 20240214";
   message += "\r\n<br>";
 
   message += "Last Payload: ";
@@ -499,27 +522,6 @@ void HandleNotFound(){
 
 void setup() {
   
-  
-  //ADS1115
-  Wire.begin();
-
-  for (uint8_t i = 0; i < 4; i++)
-  {
-    uint8_t address = 0x48 + i;
-    ADS[i] = ADS1115(address);
-
-    Serial.print(address, HEX);
-    Serial.print("  ");
-    Serial.println(ADS[i].begin() ? "connected" : "not connected");
-
-    //  0 = slow   4 = medium   7 = fast, but more noise
-    ADS[i].setDataRate(4);
-  }
-  
-  ADS_request_all();
-  
-  //End ADS1115
-  
   pinMode(led, OUTPUT);
   // We start by connecting to a WiFi network
   
@@ -557,11 +559,11 @@ void setup() {
   server.begin();
   DEBUG_PRINT ("server on");
   digitalWrite(led, 1);
+  
   #ifdef LED
     lastLED = millis();
   #endif
 
-  //Setup DS18b20 temperature sensor
   #ifdef TEMP
     setupDS18B20();
   #endif
@@ -577,12 +579,37 @@ void setup() {
   #endif
   
   #ifdef PRESSURE
-    //setupPressureSensor();
+    //ADS1115
+    Wire.begin();
+
+    for (uint8_t i = 0; i < 4; i++)
+    {
+      uint8_t address = 0x48 + i;
+      ADS[i] = ADS1115(address);
+
+      Serial.print(address, HEX);
+      Serial.print("  ");
+      Serial.println(ADS[i].begin() ? "connected" : "not connected");
+
+      //  0 = slow   4 = medium   7 = fast, but more noise
+      ADS[i].setDataRate(4);
+    }
+    
+    ADS_request_all();
+    
+    //End ADS1115
+
+
   #endif
 
   #ifdef BLINK
     lastBlink = millis();
     pinMode(LDR, INPUT);
+  #endif
+
+  #ifdef S0_PULSE
+    lastPulse = millis();
+    pinMode(PULSE, INPUT);
   #endif
 }
 
@@ -614,6 +641,10 @@ void loop() {
 
   #ifdef BLINK
     BlinkLoop();
+  #endif
+
+  #ifdef S0_PULSE
+    S0_PulseLoop();
   #endif
 
 }
