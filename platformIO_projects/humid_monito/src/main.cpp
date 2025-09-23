@@ -7,6 +7,8 @@
 #include <DHT_U.h>
 #include <WebServer.h>
 #include <ESPmDNS.h>
+#include <PubSubClient.h>
+
 
 #define DEBUG
 
@@ -39,6 +41,18 @@ WiFiUDP udp; //UDP for influx
 byte udp_host[] = {192, 168, 10, 7}; // the IP address of InfluxDB host
 int udp_port = 8089; // the port that the InfluxDB UDP plugin is listening on
 
+//MQTT
+WiFiClient wifiClient;
+PubSubClient mqttClient(wifiClient);
+const char* mqtt_server = "diana.local";
+const int mqtt_port = 1883;
+const char* sensor_names[] = {
+  "Humid_in_Room",
+  "humid_in_freezer", 
+  "Humid_out_of_dryer_box",
+  "Humid_out_of_filament_box"
+};
+
 String hostname  = "ArduinoOTA.getHostname";
 String payload = "default";
 
@@ -60,6 +74,33 @@ void send_value(String location, String value) {
   udp.beginPacket(udp_host, udp_port);
   udp.print(payload);
   udp.endPacket();
+}
+
+void connectMQTT() {
+  if (!mqttClient.connected()) {
+    DEBUG_PRINT("Attempting MQTT connection...");
+    String clientId = "ESP32-" + hostname;
+    
+    // Set a shorter timeout for connection attempt
+    mqttClient.setKeepAlive(15);
+    mqttClient.setSocketTimeout(5);
+    
+    if (mqttClient.connect(clientId.c_str())) {
+      DEBUG_PRINT("MQTT connected");
+    } else {
+      DEBUG_PRINT("MQTT connection failed, rc=");
+      DEBUG_PRINT(mqttClient.state());
+    }
+  }
+}
+
+void publishMQTT(const char* sensorName, const char* dataType, float value) {
+  if (mqttClient.connected()) {
+    String topic = "filament/" + String(sensorName) + "/" + String(dataType);
+    String payload = String(value, 2);
+    mqttClient.publish(topic.c_str(), payload.c_str());
+    DEBUG_PRINT("MQTT Published: " + topic + " = " + payload);
+  }
 }
 
 #ifdef TEMP
@@ -271,12 +312,76 @@ void send_value(String location, String value) {
 #ifdef HUMID
   const int NUM_SENSORS = 4;
   const int HumidInputs[NUM_SENSORS] = {4, 14, 15, 16};
-  int analogSliderValues[NUM_SENSORS];
-  #define DHTPIN 2
+  float humidValue[NUM_SENSORS];
+  float tempValue[NUM_SENSORS];
+  
+  unsigned long lastHUM = 0;
+  const unsigned long durationHUM = 120000; // 2 minutes (120,000 ms)
+  
   #define DHTTYPE    DHT22     // DHT 22 (AM2302)
-  DHT_Unified dht(DHTPIN, DHTTYPE);
-  for (int i = 0; i < NUM_SLIDERS; i++) {
-    pinMode(analogInputs[i], INPUT);
+
+  // Global or class member variables
+  DHT_Unified dhtSensors[NUM_SENSORS] = {
+    DHT_Unified(HumidInputs[0], DHTTYPE),
+    DHT_Unified(HumidInputs[1], DHTTYPE),
+    DHT_Unified(HumidInputs[2], DHTTYPE),
+    DHT_Unified(HumidInputs[3], DHTTYPE),
+  };
+
+  void setupHumidSensor() {
+    for (int i = 0; i < NUM_SENSORS; i++) {
+      DHT_Unified dht(HumidInputs[i], DHTTYPE);
+      dhtSensors[i].begin();
+    }
+  }
+
+  void HumidLoop() {
+    bool shouldSendUDP = (millis() - lastHUM > durationHUM);
+    
+    // Only connect to MQTT when we need to send data
+    if (shouldSendUDP && !mqttClient.connected()) {
+      connectMQTT();
+    }
+    
+    for (int i = 0; i < NUM_SENSORS; i++) {
+      sensors_event_t event;
+      dhtSensors[i].temperature().getEvent(&event);
+      if (!isnan(event.temperature)) {
+        tempValue[i] = event.temperature;
+      }
+      
+      // Allow other tasks to run between sensor reads
+      yield();
+      
+      dhtSensors[i].humidity().getEvent(&event);
+      if (!isnan(event.relative_humidity)) {
+        humidValue[i] = event.relative_humidity;
+        
+        if (shouldSendUDP) {
+          // Send to InfluxDB (existing functionality)
+          send_value("humid-" + String(i), String(event.relative_humidity));
+          yield(); // Allow other tasks instead of delay
+          
+          // Also send temperature to InfluxDB
+          send_value("temp-" + String(i), String(tempValue[i]));
+          yield(); // Allow other tasks instead of delay
+          
+          // Send to MQTT (new functionality)
+          publishMQTT(sensor_names[i], "humidity", event.relative_humidity);
+          yield(); // Allow other tasks instead of delay
+          
+          publishMQTT(sensor_names[i], "temperature", tempValue[i]);
+          yield(); // Allow other tasks instead of delay
+        }
+      }
+      
+      // Allow other tasks to run between sensors
+      yield();
+    }
+    
+    if (shouldSendUDP) {
+      lastHUM = millis(); // Update last measurement time
+    }
   }
 
 #endif
@@ -299,9 +404,16 @@ void HandleRoot(){
   #endif
 
   #ifdef HUMID
-    message += "RH [%]: ";
-    message += humidValue;
+  for (int i = 0; i < NUM_SENSORS; i++) {
+    message += "Temp [C] ";
+    message += i;
+    message += ": ";
+    message += String(tempValue[i], 2);  // 2 decimal places
     message += "\r\n<br>";
+    message += "RH [%]: ";
+    message += String(humidValue[i], 2);  // 2 decimal places
+    message += "\r\n<br>";
+  }
   #endif
 
   #ifdef DISTANCE
@@ -390,11 +502,11 @@ void setup() {
   server.begin();
   
   digitalWrite(led, 1);
+
   #ifdef LED
     lastLED = millis();
   #endif
 
-  //Setup DS18b20 temperature sensor
   #ifdef TEMP
     setupDS18B20();
   #endif
@@ -409,15 +521,27 @@ void setup() {
     setupLightSensor();
   #endif
 
-    #ifdef HUMID
+  #ifdef HUMID
     setupHumidSensor();
+    lastHUM = millis();
   #endif
+  
+  // Initialize MQTT
+  mqttClient.setServer(mqtt_server, mqtt_port);
+  DEBUG_PRINT("MQTT server configured: ");
+  DEBUG_PRINT(mqtt_server);
 }
 
 void loop() {
   ArduinoOTA.handle();
+  yield(); // Allow WiFi and other background tasks
 
   server.handleClient();
+  yield(); // Allow WiFi and other background tasks
+  
+  // Handle MQTT
+  mqttClient.loop();
+  yield(); // Allow WiFi and other background tasks
 
   #ifdef LED
     LEDLoop();
@@ -425,17 +549,21 @@ void loop() {
 
   #ifdef HUMID
     HumidLoop();
+    yield(); // Allow other tasks after sensor readings
   #endif
 
   #ifdef TEMP
     TempLoop();
+    yield(); // Allow other tasks after sensor readings
   #endif
 
   #ifdef DISTANCE
     DistLoop();
+    yield(); // Allow other tasks
   #endif
 
   #ifdef LIGHT
     LightLoop();
+    yield(); // Allow other tasks
   #endif
 }
